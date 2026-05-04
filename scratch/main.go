@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"sync"
 )
 
@@ -55,9 +58,23 @@ func newWg() {
 		fmt.Printf("datachan i: %v\n", i)
 	}
 }
+
 func main() {
 	fmt.Println("scratch")
 	// oldWg()
+
 	newWg()
+	var (
+		reader io.Reader
+	)
+	req, err := http.NewRequestWithContext(context.Background(), "GET", "https://www.google.com", reader)
+	if err != nil {
+		fmt.Printf("error: %v", err)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Printf("err: %v", err)
+	}
+	fmt.Printf("res: %v", res)
 	fmt.Println("break")
 }

@@ -32,36 +32,50 @@ func must(err error) {
 		log.Panic(err)
 	}
 }
+func spawnAsChild(args []string) {
+	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, args[1:]...)...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	cmd.SysProcAttr =
+		&syscall.SysProcAttr{
+			Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWIPC,
+		}
+
+	must(cmd.Run())
+}
 
 func parseArgs(cliCmd *cobra.Command, args []string) {
-	runCmd = args[0]
-	image = args[1]
-	command = args[2]
-	cmdArgs := args[3:]
+	spawnAsChild(args)
 
-	_ = cmdArgs
+}
+func runAsChild() {
+	syscall.Sethostname([]byte("vessel"))
+
+	command := os.Args[3]
+	cmdArgs := os.Args[4:]
+
 	cmd := exec.Command(command, cmdArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr =
-		&syscall.SysProcAttr{
-			Cloneflags: syscall.CLONE_NEWUTS,
-		}
-	must(cmd.Run())
 
-	for _, arg := range args {
-		fmt.Printf("arg: %v\n", arg)
-	}
-	_ = cliCmd
+	must(cmd.Run())
 }
 func init() {
+
 	// flags will go here
 }
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "child" {
+		runAsChild()
+		return
+	}
+
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Printf("error: {%v}", err)
 		os.Exit(1)
 	}
-	fmt.Println("hello vessel")
 }
