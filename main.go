@@ -27,11 +27,16 @@ var rootCmd = &cobra.Command{
 	Run:   parseArgs,
 }
 
-func must(err error) {
+func must(err error, msg ...string) {
 	if err != nil {
-		log.Panic(err)
+		if len(msg) > 0 {
+			log.Panicf("%s: %v", msg[0], err)
+		} else {
+			log.Panic(err)
+		}
 	}
 }
+
 func spawnAsChild(args []string) {
 	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, args[1:]...)...)
 	cmd.Stdin = os.Stdin
@@ -50,6 +55,7 @@ func parseArgs(cliCmd *cobra.Command, args []string) {
 	spawnAsChild(args)
 
 }
+
 func runAsChild() {
 	syscall.Sethostname([]byte("vessel"))
 
@@ -60,6 +66,19 @@ func runAsChild() {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
+	const rootfs = "./rootfs"
+	const oldRoot = ".old_root"
+	must(syscall.Mount(rootfs, rootfs, "", syscall.MS_BIND|syscall.MS_REC, ""))
+
+	if err := os.MkdirAll(rootfs+"/"+oldRoot, 0755); err != nil {
+		if !os.IsExist(err) {
+			must(err)
+		}
+	}
+
+	must(syscall.Chroot(rootfs), "chroot")
+	must(syscall.Chdir("/"), "chdir to /")
 
 	must(cmd.Run())
 }
