@@ -67,7 +67,7 @@ func runAsChild() {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	const rootfs = "./rootfs"
+	const rootfs = "/home/peterbull.guest/rootfs"
 	const oldRoot = ".old_root"
 	must(syscall.Mount(rootfs, rootfs, "", syscall.MS_BIND|syscall.MS_REC, ""))
 
@@ -79,7 +79,7 @@ func runAsChild() {
 
 	must(syscall.Chroot(rootfs), "chroot")
 	must(syscall.Chdir("/"), "chdir to /")
-
+	must(syscall.Mount("proc", "/proc", "proc", 0, ""))
 	must(cmd.Run())
 }
 func init() {
