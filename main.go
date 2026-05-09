@@ -3,11 +3,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"strconv"
 
 	"os/exec"
+	"os/signal"
 
 	"syscall"
 
@@ -49,14 +53,16 @@ func spawnAsChild(args []string) {
 		}
 
 	must(cmd.Run())
+
+	syscall.Unmount("/home/peterbull.guest/rootfs", syscall.MNT_DETACH)
+	os.Remove("/sys/fs/cgroup/mycontainer")
 }
 
 func parseArgs(cliCmd *cobra.Command, args []string) {
 	spawnAsChild(args)
-
 }
+func runAsChild(ctx context.Context) {
 
-func runAsChild() {
 	syscall.Sethostname([]byte("vessel"))
 
 	command := os.Args[3]
@@ -69,27 +75,49 @@ func runAsChild() {
 
 	const rootfs = "/home/peterbull.guest/rootfs"
 	const oldRoot = ".old_root"
-	must(syscall.Mount(rootfs, rootfs, "", syscall.MS_BIND|syscall.MS_REC, ""))
+	pid := []byte(strconv.Itoa(os.Getpid()))
+	must(os.MkdirAll("/sys/fs/cgroup/mycontainer", 0755))
 
+	// cgroups v2 requires explicit enable
+	must(os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+cpu +memory +pids"), 0700))
+
+	must(os.WriteFile("/sys/fs/cgroup/mycontainer/cgroup.procs", pid, 0700))
+	must(os.WriteFile("/sys/fs/cgroup/mycontainer/pids.max", []byte("20"), 0700))
+
+	// 100 mb
+	must(os.WriteFile("/sys/fs/cgroup/mycontainer/memory.max", []byte("104857600"), 0700))
+	// half of a core
+	must(os.WriteFile("/sys/fs/cgroup/mycontainer/cpu.max", []byte("50000 100000"), 0700))
+
+	// have to make private before bind mount
+	must(syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, ""), "make / private")
+	must(syscall.Mount(rootfs, rootfs, "", syscall.MS_BIND|syscall.MS_REC, ""), "bind mount")
 	if err := os.MkdirAll(rootfs+"/"+oldRoot, 0755); err != nil {
 		if !os.IsExist(err) {
 			must(err)
 		}
 	}
 
-	must(syscall.Chroot(rootfs), "chroot")
-	must(syscall.Chdir("/"), "chdir to /")
-	must(syscall.Mount("proc", "/proc", "proc", 0, ""))
+	must(syscall.Chdir(rootfs), "chdir to rootfs")
+	must(syscall.PivotRoot(".", oldRoot), "pivot_root")
+	must(syscall.Chdir("/"), "chdir to new /")
+	must(syscall.Unmount(oldRoot, syscall.MNT_DETACH), "unmount old root")
+	must(syscall.Rmdir(oldRoot), "rmdir old root")
+	must(syscall.Mount("proc", "/proc", "proc", 0, ""), "mount proc")
+
 	must(cmd.Run())
 }
+
 func init() {
 
 	// flags will go here
 }
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 	if len(os.Args) > 1 && os.Args[1] == "child" {
-		runAsChild()
+		runAsChild(ctx)
 		return
 	}
 
