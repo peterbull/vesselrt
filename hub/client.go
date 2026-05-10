@@ -1,4 +1,4 @@
-package main
+package hub
 
 import (
 	"archive/tar"
@@ -12,59 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
 )
-
-func testFunc() int {
-	return 123
-}
-func testFunc2() {
-	fmt.Println("called testfunc2")
-}
-func DoWork(i int) int {
-	fmt.Printf("%v", i)
-	return i
-}
-func oldWg() {
-	dataChan := make(chan int)
-	testFunc()
-	testFunc2()
-	go func() {
-		wg := sync.WaitGroup{}
-		for i := range 1000 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				dataChan <- DoWork(i)
-			}()
-		}
-		wg.Wait()
-		close(dataChan)
-	}()
-	for i := range dataChan {
-		fmt.Printf("datachan i: %v\n", i)
-	}
-}
-func newWg() {
-	dataChan := make(chan int)
-	var (
-		wg sync.WaitGroup
-	)
-
-	go func() {
-		for i := range 1000 {
-			wg.Go(func() {
-				dataChan <- DoWork(i)
-			})
-		}
-		wg.Wait()
-		close(dataChan)
-	}()
-
-	for i := range dataChan {
-		fmt.Printf("datachan i: %v\n", i)
-	}
-}
 
 type AuthResponse struct {
 	Token string `json:"token"`
@@ -133,14 +81,11 @@ func fetchImageManifest(token string, arch string) (ImageManifest, error) {
 	if err != nil {
 		return ImageManifest{}, fmt.Errorf("error reading manifest: %v", err)
 	}
-	// var result map[string]any
 	var result ManifestList
 	if err := json.Unmarshal(final, &result); err != nil {
 		return ImageManifest{}, fmt.Errorf("error parsing manifest: %v", err)
 	}
 
-	fmt.Printf("result: %v", result)
-	fmt.Println("break")
 	idx := slices.IndexFunc(result.Manifests, func(m ManifestEntry) bool {
 		return m.Platform.Architecture == arch
 	})
@@ -229,24 +174,7 @@ func unpackLayer(r io.Reader, destDir string) error {
 	return nil
 }
 
-func main() {
-	fmt.Println("scratch")
-	// // oldWg()
-	//
-	// newWg()
-	// var (
-	// 	reader io.Reader
-	// )
-	// req, err := http.NewRequestWithContext(context.Background(), "GET", "https://www.google.com", reader)
-	// if err != nil {
-	// 	fmt.Printf("error: %v", err)
-	// }
-	// res, err := http.DefaultClient.Do(req)
-	// if err != nil {
-	// 	fmt.Printf("err: %v", err)
-	// }
-	// fmt.Printf("res: %v", res)
-
+func PullImage(imageName string) {
 	authResp, err := fetchDockerToken()
 	if err != nil {
 		log.Fatalf("somthing happened and you aint get no token: %v", err)
@@ -256,11 +184,8 @@ func main() {
 		log.Fatalf("something happened and no manifest lists: %v", err)
 	}
 	for _, layer := range manifest.Layers {
-		if err := fetchLayer(authResp.Token, "alpine", layer.Digest); err != nil {
+		if err := fetchLayer(authResp.Token, imageName, layer.Digest); err != nil {
 			log.Fatalf("something happened and no layers all messed up and stuff: %v", err)
 		}
 	}
-	fmt.Printf("manifest list: %v", manifest)
-
-	fmt.Println("break")
 }

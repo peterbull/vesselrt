@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"strconv"
 
@@ -15,6 +14,7 @@ import (
 
 	"syscall"
 
+	"github.com/peterbull/vesselrt/hub"
 	"github.com/spf13/cobra"
 )
 
@@ -72,7 +72,7 @@ func runAsChild(ctx context.Context) {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-
+	hub.PullImage("alpine")
 	const rootfs = "/home/peterbull.guest/rootfs"
 	const oldRoot = ".old_root"
 	pid := []byte(strconv.Itoa(os.Getpid()))
