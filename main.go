@@ -15,20 +15,39 @@ import (
 	"syscall"
 
 	"github.com/peterbull/vesselrt/hub"
+	"github.com/peterbull/vesselrt/state"
 	"github.com/spf13/cobra"
 )
 
-var (
-	runCmd  string
-	image   string
-	command string
-)
-
 var rootCmd = &cobra.Command{
+	Use:   "vesselrt",
+	Short: "A container runtime",
+}
+
+var runCmd = &cobra.Command{
 	Use:   "run [image] [command]",
-	Short: "run images",
-	Args:  cobra.MinimumNArgs(3),
-	Run:   parseArgs,
+	Short: "Run a command in a container",
+	Args:  cobra.MinimumNArgs(2),
+	Run:   runContainer,
+}
+
+var psCmd = &cobra.Command{
+	Use:   "ps",
+	Short: "List running containers",
+	Run:   listContainers,
+}
+
+var killCmd = &cobra.Command{
+	Use:   "kill [id]",
+	Short: "Kill a running container",
+	Args:  cobra.ExactArgs(1),
+	Run:   killContainer,
+}
+
+func init() {
+	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(psCmd)
+	rootCmd.AddCommand(killCmd)
 }
 
 func must(err error, msg ...string) {
@@ -58,22 +77,34 @@ func spawnAsChild(args []string) {
 	os.Remove("/sys/fs/cgroup/mycontainer")
 }
 
-func parseArgs(cliCmd *cobra.Command, args []string) {
+func runContainer(cliCmd *cobra.Command, args []string) {
 	spawnAsChild(args)
 }
+func listContainers(cliCmd *cobra.Command, args []string) {
+
+}
+func killContainer(cliCmd *cobra.Command, args []string) {}
+
 func runAsChild(ctx context.Context) {
 
 	syscall.Sethostname([]byte("vessel"))
 
-	command := os.Args[3]
-	cmdArgs := os.Args[4:]
+	command := os.Args[2]
+	cmdArgs := os.Args[3:]
 
 	cmd := exec.Command(command, cmdArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	hub.PullImage("alpine")
-	const rootfs = "/home/peterbull.guest/rootfs"
+
+	imgName := "alpine"
+	imgPath := fmt.Sprintf("images/%s", imgName)
+	_, err := os.Stat(imgPath)
+	if os.IsNotExist(err) {
+		hub.PullImage(imgName)
+	}
+
+	rootfs := fmt.Sprintf("images/%s/rootfs", imgName)
 	const oldRoot = ".old_root"
 	pid := []byte(strconv.Itoa(os.Getpid()))
 	must(os.MkdirAll("/sys/fs/cgroup/mycontainer", 0755))
@@ -95,6 +126,7 @@ func runAsChild(ctx context.Context) {
 	if err := os.MkdirAll(rootfs+"/"+oldRoot, 0755); err != nil {
 		if !os.IsExist(err) {
 			must(err)
+
 		}
 	}
 
@@ -104,13 +136,10 @@ func runAsChild(ctx context.Context) {
 	must(syscall.Unmount(oldRoot, syscall.MNT_DETACH), "unmount old root")
 	must(syscall.Rmdir(oldRoot), "rmdir old root")
 	must(syscall.Mount("proc", "/proc", "proc", 0, ""), "mount proc")
-
+	containerState := state.ContainerState{ID: "anyId"}
+	fmt.Println("writing state")
+	state.WriteState(containerState)
 	must(cmd.Run())
-}
-
-func init() {
-
-	// flags will go here
 }
 
 func main() {

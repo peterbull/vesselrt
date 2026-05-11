@@ -167,6 +167,7 @@ func unpackLayer(r io.Reader, destDir string) error {
 			f, _ := os.Create(target)
 			io.Copy(f, tr)
 			f.Close()
+			os.Chmod(target, os.FileMode(header.Mode))
 		case tar.TypeSymlink:
 			os.Symlink(header.Linkname, target)
 		}
