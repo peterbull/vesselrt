@@ -3,7 +3,10 @@ build:
 
 run: build
 	sudo ./bin/app run alpine /bin/sh
-
+ps:
+	sudo ./bin/app ps
+kill:
+	sudo ./bin/app kill $(CONTAINER_ID)
 build-scratch:
 	go build -o bin/scratch ./scratch
 

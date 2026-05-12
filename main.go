@@ -4,10 +4,13 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
 	"strconv"
+	"time"
 
 	"os/exec"
 	"os/signal"
@@ -61,36 +64,106 @@ func must(err error, msg ...string) {
 }
 
 func spawnAsChild(args []string) {
-	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, args[1:]...)...)
+	containerId, err := createID(12)
+	if err != nil {
+		log.Fatalf("error generating container id: %v", err)
+	}
+
+	cmd := exec.Command("/proc/self/exe", append([]string{"child", containerId}, args[1:]...)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWIPC,
+	}
 
-	cmd.SysProcAttr =
-		&syscall.SysProcAttr{
-			Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWIPC,
-		}
+	if err := cmd.Start(); err != nil {
+		log.Fatalf("error starting container: %v", err)
+	}
 
-	must(cmd.Run())
+	containerState := state.ContainerState{
+		ID:      containerId,
+		PID:     cmd.Process.Pid,
+		Status:  "Running",
+		Image:   "alpine",
+		Rootfs:  "images/alpine/rootfs",
+		Created: time.Now(),
+	}
+	if err := state.WriteState(containerState); err != nil {
+		log.Printf("error writing state: %v", err)
+	}
 
+	if err := cmd.Wait(); err != nil {
+		log.Printf("err, exiting %v", err)
+	}
+
+	// cleanup...
+	state.DeleteState(containerId)
 	syscall.Unmount("/home/peterbull.guest/rootfs", syscall.MNT_DETACH)
-	os.Remove("/sys/fs/cgroup/mycontainer")
+	os.Remove(fmt.Sprintf("/sys/fs/cgroup/%s", containerId))
 }
 
 func runContainer(cliCmd *cobra.Command, args []string) {
 	spawnAsChild(args)
 }
+
 func listContainers(cliCmd *cobra.Command, args []string) {
+	baseDir := "/run/vesselrt"
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		fmt.Printf("error listing containers: %v", err)
+	}
+	for _, entry := range entries {
 
+		file, err := os.ReadFile(fmt.Sprintf("%s/%s/state.json", baseDir, entry.Name()))
+		if err != nil {
+			fmt.Printf("error reading state from file: %v", err)
+		}
+		if entry.IsDir() {
+			fmt.Printf("state: %s", string(file))
+		}
+	}
 }
-func killContainer(cliCmd *cobra.Command, args []string) {}
 
-func runAsChild(ctx context.Context) {
+func killContainer(cliCmd *cobra.Command, args []string) {
+	containerId := args[0]
+	containerState, err := state.ReadState(containerId)
+	if err != nil {
+		fmt.Printf("error killing container: %v", err)
+		return
+	}
+	process, err := os.FindProcess(containerState.PID)
+	if err != nil {
+		fmt.Printf("error finding process: %v", err)
+		return
+	}
+	err = process.Signal(os.Interrupt)
+	if err != nil {
+		fmt.Printf("error killing process: %v", err)
+	}
+	fmt.Printf("sigint sent to process: %d", containerState.PID)
+}
 
+func createID(length int) (string, error) {
+	bytes := make([]byte, length/2)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
+}
+
+type ContainerStatus string
+
+const (
+	Running ContainerStatus = "Running"
+	Stopped ContainerStatus = "Stopped"
+)
+
+func runAsChild() error {
 	syscall.Sethostname([]byte("vessel"))
-
-	command := os.Args[2]
-	cmdArgs := os.Args[3:]
+	containerID := os.Args[2]
+	command := os.Args[3]
+	cmdArgs := os.Args[4:]
 
 	cmd := exec.Command(command, cmdArgs...)
 	cmd.Stdin = os.Stdin
@@ -106,19 +179,21 @@ func runAsChild(ctx context.Context) {
 
 	rootfs := fmt.Sprintf("images/%s/rootfs", imgName)
 	const oldRoot = ".old_root"
-	pid := []byte(strconv.Itoa(os.Getpid()))
-	must(os.MkdirAll("/sys/fs/cgroup/mycontainer", 0755))
+	intPID := os.Getpid()
+	pid := []byte(strconv.Itoa(intPID))
+	must(os.MkdirAll(fmt.Sprintf("/sys/fs/cgroup/%s", containerID), 0755))
 
 	// cgroups v2 requires explicit enable
 	must(os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+cpu +memory +pids"), 0700))
 
-	must(os.WriteFile("/sys/fs/cgroup/mycontainer/cgroup.procs", pid, 0700))
-	must(os.WriteFile("/sys/fs/cgroup/mycontainer/pids.max", []byte("20"), 0700))
+	must(os.WriteFile(fmt.Sprintf("/sys/fs/cgroup/%s/cgroup.procs", containerID), pid, 0700))
+	must(os.WriteFile(fmt.Sprintf("/sys/fs/cgroup/%s/pids.max", containerID), []byte("20"), 0700))
 
 	// 100 mb
-	must(os.WriteFile("/sys/fs/cgroup/mycontainer/memory.max", []byte("104857600"), 0700))
+	must(os.WriteFile(fmt.Sprintf("/sys/fs/cgroup/%s/memory.max", containerID), []byte("104857600"), 0700))
+
 	// half of a core
-	must(os.WriteFile("/sys/fs/cgroup/mycontainer/cpu.max", []byte("50000 100000"), 0700))
+	must(os.WriteFile(fmt.Sprintf("/sys/fs/cgroup/%s/cpu.max", containerID), []byte("50000 100000"), 0700))
 
 	// have to make private before bind mount
 	must(syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, ""), "make / private")
@@ -130,23 +205,28 @@ func runAsChild(ctx context.Context) {
 		}
 	}
 
+	// pivot root
 	must(syscall.Chdir(rootfs), "chdir to rootfs")
 	must(syscall.PivotRoot(".", oldRoot), "pivot_root")
 	must(syscall.Chdir("/"), "chdir to new /")
 	must(syscall.Unmount(oldRoot, syscall.MNT_DETACH), "unmount old root")
 	must(syscall.Rmdir(oldRoot), "rmdir old root")
 	must(syscall.Mount("proc", "/proc", "proc", 0, ""), "mount proc")
-	containerState := state.ContainerState{ID: "anyId"}
-	fmt.Println("writing state")
-	state.WriteState(containerState)
-	must(cmd.Run())
+
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("error, exiting... %v\n", err)
+	}
+
+	return nil
 }
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	_, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if len(os.Args) > 1 && os.Args[1] == "child" {
-		runAsChild(ctx)
+		if err := runAsChild(); err != nil {
+			log.Fatalf("big error: %v", err)
+		}
 		return
 	}
 
