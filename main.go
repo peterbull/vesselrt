@@ -97,7 +97,6 @@ func spawnAsChild(args []string) {
 		log.Printf("err, exiting %v", err)
 	}
 
-	// cleanup...
 	state.DeleteState(containerId)
 	syscall.Unmount("/home/peterbull.guest/rootfs", syscall.MNT_DETACH)
 	os.Remove(fmt.Sprintf("/sys/fs/cgroup/%s", containerId))
