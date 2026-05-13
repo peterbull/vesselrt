@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+
+	"github.com/vishvananda/netlink"
 )
 
 func testFunc() int {
@@ -228,6 +230,28 @@ func unpackLayer(r io.Reader, destDir string) error {
 	}
 	return nil
 }
+func CreateVethPairs() {
+	localName := "veth-local"
+	peerName := "veth-peer"
+	la := netlink.NewLinkAttrs()
+	la.Name = localName
+	veth := &netlink.Veth{
+		LinkAttrs: la,
+		PeerName:  peerName,
+	}
+
+	if err := netlink.LinkAdd(veth); err != nil {
+		log.Fatalf("couldn't add veth pair: %v", err)
+	}
+
+	// bring up interfaces
+	local, _ := netlink.LinkByName(localName)
+	peer, _ := netlink.LinkByName(peerName)
+
+	netlink.LinkSetUp(local)
+	netlink.LinkSetUp(peer)
+	fmt.Println("break")
+}
 
 func main() {
 	fmt.Println("scratch")
@@ -247,20 +271,20 @@ func main() {
 	// }
 	// fmt.Printf("res: %v", res)
 
-	authResp, err := fetchDockerToken()
-	if err != nil {
-		log.Fatalf("somthing happened and you aint get no token: %v", err)
-	}
-	manifest, err := fetchImageManifest(authResp.Token, "arm64")
-	if err != nil {
-		log.Fatalf("something happened and no manifest lists: %v", err)
-	}
-	for _, layer := range manifest.Layers {
-		if err := fetchLayer(authResp.Token, "alpine", layer.Digest); err != nil {
-			log.Fatalf("something happened and no layers all messed up and stuff: %v", err)
-		}
-	}
-	fmt.Printf("manifest list: %v", manifest)
-
+	// authResp, err := fetchDockerToken()
+	// if err != nil {
+	// 	log.Fatalf("somthing happened and you aint get no token: %v", err)
+	// }
+	// manifest, err := fetchImageManifest(authResp.Token, "arm64")
+	// if err != nil {
+	// 	log.Fatalf("something happened and no manifest lists: %v", err)
+	// }
+	// for _, layer := range manifest.Layers {
+	// 	if err := fetchLayer(authResp.Token, "alpine", layer.Digest); err != nil {
+	// 		log.Fatalf("something happened and no layers all messed up and stuff: %v", err)
+	// 	}
+	// }
+	// fmt.Printf("manifest list: %v", manifest)
+	CreateVethPairs()
 	fmt.Println("break")
 }

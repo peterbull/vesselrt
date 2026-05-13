@@ -18,8 +18,10 @@ import (
 	"syscall"
 
 	"github.com/peterbull/vesselrt/hub"
+	"github.com/peterbull/vesselrt/network"
 	"github.com/peterbull/vesselrt/state"
 	"github.com/spf13/cobra"
+	"github.com/vishvananda/netlink"
 )
 
 var rootCmd = &cobra.Command{
@@ -74,12 +76,24 @@ func spawnAsChild(args []string) {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWIPC,
+		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWIPC | syscall.CLONE_NEWNET,
 	}
 
 	if err := cmd.Start(); err != nil {
 		log.Fatalf("error starting container: %v", err)
 	}
+	pid := cmd.Process.Pid
+	nsFile, err := os.Open(fmt.Sprintf("/proc/%d/ns/net", pid))
+	defer nsFile.Close()
+	if err != nil {
+		log.Fatalf("error getting proc namespace: %v", err)
+	}
+	local, peer := network.CreateVethPairs()
+
+	nsFd := nsFile.Fd()
+
+	netlink.LinkSetNsFd(peer, int(nsFd))
+	defer netlink.LinkDel(local)
 
 	containerState := state.ContainerState{
 		ID:      containerId,
@@ -89,15 +103,15 @@ func spawnAsChild(args []string) {
 		Rootfs:  "images/alpine/rootfs",
 		Created: time.Now(),
 	}
+
 	if err := state.WriteState(containerState); err != nil {
 		log.Printf("error writing state: %v", err)
 	}
-
+	defer state.DeleteState(containerId)
 	if err := cmd.Wait(); err != nil {
 		log.Printf("err, exiting %v", err)
 	}
 
-	state.DeleteState(containerId)
 	syscall.Unmount("/home/peterbull.guest/rootfs", syscall.MNT_DETACH)
 	os.Remove(fmt.Sprintf("/sys/fs/cgroup/%s", containerId))
 }
