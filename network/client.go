@@ -3,9 +3,15 @@ package network
 import (
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/vishvananda/netlink"
 )
+
+func EnableIPFwd() error {
+	// nat rule. needs to be done in the parent process
+	return os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 8644)
+}
 
 func CreateVethPairs() (netlink.Link, netlink.Link) {
 	localName := "veth-local"

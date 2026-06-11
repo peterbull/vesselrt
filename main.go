@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"strconv"
 	"time"
@@ -70,7 +71,9 @@ func spawnAsChild(args []string) {
 	if err != nil {
 		log.Fatalf("error generating container id: %v", err)
 	}
-
+	if err := network.EnableIPFwd(); err != nil {
+		log.Fatalf("couldn't create nat rule in proc")
+	}
 	cmd := exec.Command("/proc/self/exe", append([]string{"child", containerId}, args[1:]...)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -84,11 +87,25 @@ func spawnAsChild(args []string) {
 	}
 	pid := cmd.Process.Pid
 	nsFile, err := os.Open(fmt.Sprintf("/proc/%d/ns/net", pid))
-	defer nsFile.Close()
+
 	if err != nil {
 		log.Fatalf("error getting proc namespace: %v", err)
 	}
+
+	defer nsFile.Close()
 	local, peer := network.CreateVethPairs()
+
+	bridge := &netlink.Bridge{LinkAttrs: netlink.LinkAttrs{Name: "vesselrt0"}}
+	netlink.LinkAdd(bridge)
+
+	// local ip
+	addr, _ := netlink.ParseAddr("10.0.0.1/24")
+	netlink.AddrAdd(bridge, addr)
+
+	// attach the host side veth to bridge
+	netlink.LinkSetMaster(local, bridge)
+	netlink.LinkSetUp(local)
+	netlink.LinkSetUp(bridge)
 
 	nsFd := nsFile.Fd()
 
@@ -173,6 +190,32 @@ const (
 )
 
 func runAsChild() error {
+
+	var link netlink.Link
+	var err error
+	for {
+		link, err = netlink.LinkByName("veth-peer")
+		if err == nil {
+			fmt.Println("network connected")
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	addr, _ := netlink.ParseAddr("10.0.0.2/24")
+
+	netlink.AddrAdd(link, addr)
+	netlink.LinkSetUp(link)
+
+	fmt.Println("ip assigned")
+
+	gw := net.ParseIP("10.0.0.1")
+	route := &netlink.Route{
+		LinkIndex: link.Attrs().Index,
+		Gw:        gw,
+	}
+	if err := netlink.RouteAdd(route); err != nil {
+		fmt.Printf("failed to add default route: %v\n", err)
+	}
 	syscall.Sethostname([]byte("vessel"))
 	containerID := os.Args[2]
 	command := os.Args[3]
@@ -185,7 +228,7 @@ func runAsChild() error {
 
 	imgName := "alpine"
 	imgPath := fmt.Sprintf("images/%s", imgName)
-	_, err := os.Stat(imgPath)
+	_, err = os.Stat(imgPath)
 	if os.IsNotExist(err) {
 		hub.PullImage(imgName)
 	}
